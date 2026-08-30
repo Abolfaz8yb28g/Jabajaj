@@ -4,7 +4,6 @@ import time
 import os
 import re
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
@@ -23,9 +22,9 @@ USER_AGENTS = [
 
 user_data = {}
 
-# ========== دریافت پروکسی ==========
+# ========== دریافت پروکسی از گیت‌هاب (خودکار) ==========
 def get_proxies_from_github():
-    """دریافت پروکسی از گیت‌هاب با هندلینگ خطا"""
+    """دریافت پروکسی از گیت‌هاب"""
     try:
         url = "https://raw.githubusercontent.com/SoliSpirit/mtproto/main/all_proxies.txt"
         response = requests.get(url, timeout=10)
@@ -38,39 +37,54 @@ def get_proxies_from_github():
                     ip = match.group(1)
                     port = match.group(2)
                     proxies.append(f"http://{ip}:{port}")
-            print(f"[{datetime.now()}] ✅ {len(proxies)} پروکسی دریافت شد")
             return proxies
         return []
     except Exception as e:
-        print(f"[{datetime.now()}] ❌ خطا در دریافت پروکسی: {e}")
+        print(f"❌ خطا در دریافت پروکسی: {e}")
         return []
 
-# ========== تابع اصلی ویو زدن با دیباگ ==========
-async def run_views_async(message, url, user_id):
-    """اجرای ویو زدن با لاگ کامل"""
+# ========== تابع اصلی ویو زدن با پروکسی دستی ==========
+async def run_views_async(message, url, user_id, custom_proxies=None):
+    """اجرای ویو زدن با پروکسی دستی یا خودکار"""
     try:
-        # تنظیم اولیه
         user_data[user_id]["status"] = "running"
         views_done = 0
         total_views = user_data[user_id].get("total_views", DEFAULT_VIEW_COUNT)
         
-        # دریافت پروکسی
-        proxy_list = get_proxies_from_github()
-        if not proxy_list:
-            print(f"[{datetime.now()}] ⚠️ بدون پروکسی - از IP خود استفاده می‌شود")
+        # ========== انتخاب پروکسی ==========
+        proxy_list = []
+        
+        # اولویت ۱: پروکسی دستی کاربر
+        if custom_proxies:
+            proxy_list = custom_proxies
             await message.edit_text(
                 f"🔄 **در حال ویو زدن...**\n"
-                f"⚠️ پروکسی دریافت نشد، از IP خود استفاده می‌شود\n"
+                f"✅ از پروکسی دستی استفاده می‌شود\n"
+                f"📊 تعداد پروکسی: {len(proxy_list)}\n"
                 f"✅ 0/{total_views} ویو ثبت شد"
             )
+        else:
+            # اولویت ۲: پروکسی خودکار از گیت‌هاب
+            proxy_list = get_proxies_from_github()
+            if proxy_list:
+                await message.edit_text(
+                    f"🔄 **در حال ویو زدن...**\n"
+                    f"✅ {len(proxy_list)} پروکسی از گیت‌هاب دریافت شد\n"
+                    f"✅ 0/{total_views} ویو ثبت شد"
+                )
+            else:
+                await message.edit_text(
+                    f"🔄 **در حال ویو زدن...**\n"
+                    f"⚠️ بدون پروکسی - از IP خود استفاده می‌شود\n"
+                    f"✅ 0/{total_views} ویو ثبت شد"
+                )
         
-        # حلقه اصلی با لاگ کامل
+        # حلقه اصلی
         for i in range(total_views):
             try:
-                # انتخاب User-Agent
                 ua = random.choice(USER_AGENTS)
                 
-                # انتخاب پروکسی
+                # انتخاب پروکسی تصادفی
                 proxy = random.choice(proxy_list) if proxy_list else None
                 proxies = {"http": proxy, "https": proxy} if proxy else None
                 
@@ -83,7 +97,6 @@ async def run_views_async(message, url, user_id):
                     "Cache-Control": "max-age=0"
                 }
                 
-                # ارسال درخواست با لاگ
                 print(f"[{datetime.now()}] 📤 ارسال درخواست {i+1}/{total_views} - {proxy or 'بدون پروکسی'}")
                 
                 response = requests.get(
@@ -94,15 +107,15 @@ async def run_views_async(message, url, user_id):
                     allow_redirects=True
                 )
                 
-                # ثبت نتیجه
                 if response.status_code == 200:
                     views_done += 1
-                    print(f"[{datetime.now()}] ✅ ویو {i+1}/{total_views} ثبت شد - کد {response.status_code}")
+                    print(f"[{datetime.now()}] ✅ ویو {i+1}/{total_views} ثبت شد")
                 else:
                     print(f"[{datetime.now()}] ⚠️ کد خطا: {response.status_code}")
                 
-                # به‌روزرسانی پیام هر ۵ ویو
                 user_data[user_id]["views_done"] = views_done
+                
+                # به‌روزرسانی هر ۵ ویو
                 if i % 5 == 0 or i == total_views - 1:
                     try:
                         await message.edit_text(
@@ -113,24 +126,16 @@ async def run_views_async(message, url, user_id):
                             f"📊 وضعیت: در حال اجرا"
                         )
                     except Exception as e:
-                        print(f"[{datetime.now()}] ⚠️ خطا در به‌روزرسانی پیام: {e}")
+                        print(f"⚠️ خطا در به‌روزرسانی پیام: {e}")
                 
-                # تاخیر تصادفی
                 delay = random.uniform(3, 7)
-                print(f"[{datetime.now()}] ⏳ تاخیر {delay:.1f} ثانیه")
                 time.sleep(delay)
                 
-            except requests.exceptions.Timeout:
-                print(f"[{datetime.now()}] ❌ تایم‌اوت در ویو {i+1}")
-                time.sleep(5)
-            except requests.exceptions.ConnectionError:
-                print(f"[{datetime.now()}] ❌ خطای اتصال در ویو {i+1}")
-                time.sleep(10)
             except Exception as e:
-                print(f"[{datetime.now()}] ❌ خطای ناشناخته: {e}")
+                print(f"❌ خطا: {e}")
                 time.sleep(5)
         
-        # اتمام عملیات
+        # اتمام
         user_data[user_id]["status"] = "completed"
         user_data[user_id]["views_done"] = views_done
         
@@ -143,26 +148,98 @@ async def run_views_async(message, url, user_id):
         )
         
     except Exception as e:
-        print(f"[{datetime.now()}] ❌ خطای کلی: {e}")
+        print(f"❌ خطای کلی: {e}")
         user_data[user_id]["status"] = "error"
         await message.edit_text(f"❌ **خطا در اجرا:**\n`{str(e)}`")
 
-# ========== بقیه کد (Start, Handle URL, Button Handler) ==========
+# ========== هندلر استارت ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = """
 🤖 **ربات ویو زن تلگرام**
 
-لینک پست خود را به من بدهید تا ویو (بازدید) مصنوعی برای آن ثبت کنم.
+**روش استفاده:**
+1️⃣ لینک پست را ارسال کنید
+2️⃣ روی دکمه شروع کلیک کنید
 
-🔗 **مثال:** `https://t.me/your_channel/123`
+**برای استفاده از پروکسی دستی:**
+📝 `/proxy http://ip:port`  
+مثال: `/proxy http://185.143.234.45:8080`
 
-⚙️ **تنظیمات پیش‌فرض:**
-- تعداد ویو: ۱۰۰
+📝 `/proxy_list` - برای مشاهده پروکسی‌های ذخیره شده
 
-📊 **وضعیت:** آماده به کار
+**توجه:** اگر پروکسی دستی وارد نکنید، از پروکسی خودکار استفاده می‌شود.
     """
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
+# ========== هندلر پروکسی دستی ==========
+async def handle_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت پروکسی دستی از کاربر"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ لطفاً پروکسی را وارد کنید:\n"
+            "`/proxy http://ip:port`\n"
+            "مثال: `/proxy http://185.143.234.45:8080`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    proxy = context.args[0]
+    
+    # اعتبارسنجی ساده
+    if not proxy.startswith("http://") and not proxy.startswith("https://"):
+        await update.message.reply_text(
+            "❌ فرمت پروکسی نامعتبر است.\n"
+            "لطفاً از فرمت زیر استفاده کنید:\n"
+            "`http://ip:port` یا `https://ip:port`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # ذخیره پروکسی
+    if "proxies" not in user_data.get(user_id, {}):
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        user_data[user_id]["proxies"] = []
+    
+    user_data[user_id]["proxies"].append(proxy)
+    
+    await update.message.reply_text(
+        f"✅ پروکسی اضافه شد:\n`{proxy}`\n\n"
+        f"📊 تعداد پروکسی‌های ذخیره شده: {len(user_data[user_id]['proxies'])}"
+    )
+
+# ========== هندلر مشاهده پروکسی‌ها ==========
+async def handle_proxy_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش لیست پروکسی‌های ذخیره شده"""
+    user_id = update.effective_user.id
+    data = user_data.get(user_id, {})
+    proxies = data.get("proxies", [])
+    
+    if not proxies:
+        await update.message.reply_text("📭 **هیچ پروکسی دستی ذخیره نشده است.**")
+        return
+    
+    text = "📋 **لیست پروکسی‌های ذخیره شده:**\n\n"
+    for i, proxy in enumerate(proxies, 1):
+        text += f"{i}. `{proxy}`\n"
+    
+    text += f"\n📊 تعداد: {len(proxies)}"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+# ========== هندلر پاک کردن پروکسی‌ها ==========
+async def handle_clear_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پاک کردن پروکسی‌های ذخیره شده"""
+    user_id = update.effective_user.id
+    if user_id in user_data:
+        user_data[user_id]["proxies"] = []
+        await update.message.reply_text("🗑️ **همه پروکسی‌های دستی پاک شدند.**")
+    else:
+        await update.message.reply_text("📭 **هیچ پروکسی برای پاک کردن وجود ندارد.**")
+
+# ========== هندلر دریافت لینک ==========
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     user_id = update.effective_user.id
@@ -181,23 +258,31 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "post_id": post_id,
         "status": "pending",
         "views_done": 0,
-        "total_views": DEFAULT_VIEW_COUNT
+        "total_views": DEFAULT_VIEW_COUNT,
+        "proxies": user_data.get(user_id, {}).get("proxies", [])  # حفظ پروکسی‌های قبلی
     }
+    
+    # نمایش وضعیت پروکسی
+    proxy_status = f"✅ {len(user_data[user_id]['proxies'])} پروکسی دستی ذخیره شده" if user_data[user_id]['proxies'] else "⚠️ بدون پروکسی دستی - از خودکار استفاده می‌شود"
     
     keyboard = [
         [InlineKeyboardButton("🚀 شروع ویو زدن", callback_data="start_views")],
-        [InlineKeyboardButton("📊 وضعیت", callback_data="status")]
+        [InlineKeyboardButton("📊 وضعیت", callback_data="status")],
+        [InlineKeyboardButton("🔄 استفاده از پروکسی دستی", callback_data="use_custom_proxy")],
+        [InlineKeyboardButton("🌐 استفاده از پروکسی خودکار", callback_data="use_auto_proxy")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         f"✅ لینک پست دریافت شد:\n`{url}`\n\n"
-        f"تعداد ویو: {DEFAULT_VIEW_COUNT}\n\n"
+        f"تعداد ویو: {DEFAULT_VIEW_COUNT}\n"
+        f"پروکسی: {proxy_status}\n\n"
         f"برای شروع روی دکمه زیر کلیک کنید:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
+# ========== هندلر دکمه‌ها ==========
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -211,8 +296,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "start_views":
         await query.edit_message_text("🔄 **در حال شروع ویو زدن...**\n⏳ لطفاً صبر کنید.")
+        
+        # بررسی استفاده از پروکسی دستی یا خودکار
+        use_custom = data.get("use_custom_proxy", False)
+        custom_proxies = data.get("proxies", []) if use_custom else None
+        
         context.application.create_task(
-            run_views_async(query.message, data["url"], user_id)
+            run_views_async(query.message, data["url"], user_id, custom_proxies)
         )
         
     elif query.data == "status":
@@ -221,19 +311,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text += f"📋 وضعیت: {data.get('status', 'نامشخص')}\n"
         status_text += f"✅ ویوهای ثبت شده: {data.get('views_done', 0)}\n"
         status_text += f"🎯 تعداد کل: {data.get('total_views', DEFAULT_VIEW_COUNT)}\n"
+        status_text += f"📦 پروکسی دستی: {len(data.get('proxies', []))} عدد"
         await query.edit_message_text(status_text, parse_mode='Markdown')
+    
+    elif query.data == "use_custom_proxy":
+        data["use_custom_proxy"] = True
+        proxies = data.get("proxies", [])
+        if proxies:
+            await query.edit_message_text(
+                f"✅ **حالت پروکسی دستی فعال شد.**\n\n"
+                f"📦 تعداد پروکسی: {len(proxies)}\n"
+                f"🔹 اولین پروکسی: `{proxies[0]}`\n\n"
+                f"حالا روی دکمه **شروع ویو زدن** کلیک کنید."
+            )
+        else:
+            await query.edit_message_text(
+                "❌ **هیچ پروکسی دستی ذخیره نشده است.**\n\n"
+                "لطفاً ابتدا با دستور `/proxy` پروکسی اضافه کنید.\n"
+                "مثال: `/proxy http://185.143.234.45:8080`"
+            )
+    
+    elif query.data == "use_auto_proxy":
+        data["use_custom_proxy"] = False
+        await query.edit_message_text(
+            "✅ **حالت پروکسی خودکار فعال شد.**\n\n"
+            "پروکسی از گیت‌هاب دریافت می‌شود.\n"
+            "حالا روی دکمه **شروع ویو زدن** کلیک کنید."
+        )
 
+# ========== تابع اصلی ==========
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("❌ خطا: توکن ربات تنظیم نشده است!")
         return
     
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # هندلرها
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("proxy", handle_proxy))
+    application.add_handler(CommandHandler("proxy_list", handle_proxy_list))
+    application.add_handler(CommandHandler("clear_proxies", handle_clear_proxies))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    print(f"[{datetime.now()}] 🤖 ربات ویو زن روشن شد!")
+    print(f"[{datetime.now()}] 🤖 ربات ویو زن با پشتیبانی از پروکسی دستی روشن شد!")
+    print(f"[{datetime.now()}] 📊 دستورات:")
+    print(f"   - /proxy http://ip:port  (اضافه کردن پروکسی)")
+    print(f"   - /proxy_list  (مشاهده پروکسی‌ها)")
+    print(f"   - /clear_proxies  (پاک کردن پروکسی‌ها)")
+    
     application.run_polling()
 
 if __name__ == "__main__":
